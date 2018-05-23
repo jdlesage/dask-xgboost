@@ -90,11 +90,20 @@ def _rebalance(client, data, labels):
 
     :return: future on the part of data
     """
-    workers = client.scheduler.workers
-    rebalanced_data = data.repartition(npartitions=len(workers)).to_delayed()
-    rebalanced_labels = labels.repartition(npartitions=len(workers)).to_delayed()
+    # Break apart Dask.array/dataframe into chunks/parts
 
-    parts = list(map(delayed, zip(rebalanced_data, rebalanced_labels)))
+    workers = client.scheduler.workers
+    data_parts = data.repartition(npartitions=len(workers)).to_delayed()
+    label_parts = labels.repartition(npartitions=len(workers)).to_delayed()
+
+    if isinstance(data_parts, np.ndarray):
+        assert data_parts.shape[1] == 1
+        data_parts = data_parts.flatten().tolist()
+    if isinstance(label_parts, np.ndarray):
+        assert label_parts.ndim == 1 or label_parts.shape[1] == 1
+        label_parts = label_parts.flatten().tolist()
+
+    parts = list(map(delayed, zip(data_parts, label_parts)))
     futures = [client.compute(part, workers=[worker]) for part, worker in zip(parts, itertools.cycle(workers.keys()))]
     return futures
 
@@ -108,20 +117,10 @@ def _train(client, params, data, labels, dmatrix_kwargs={}, **kwargs):
     --------
     train
     """
-    # Break apart Dask.array/dataframe into chunks/parts
-    data_parts = data.to_delayed()
-    label_parts = labels.to_delayed()
-    if isinstance(data_parts, np.ndarray):
-        assert data_parts.shape[1] == 1
-        data_parts = data_parts.flatten().tolist()
-    if isinstance(label_parts, np.ndarray):
-        assert label_parts.ndim == 1 or label_parts.shape[1] == 1
-        label_parts = label_parts.flatten().tolist()
-
     # Arrange parts into pairs.  This enforces co-locality
     #parts = list(map(delayed, zip(data_parts, label_parts)))
     #parts = client.compute(parts)  # Start computation in the background
-    parts = _rebalance(client, data_parts, label_parts)
+    parts = _rebalance(client, data, labels)
     yield _wait(parts)
 
     # Because XGBoost-python doesn't yet allow iterative training, we need to
