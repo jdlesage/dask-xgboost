@@ -83,7 +83,6 @@ def train_part(env, param, list_of_parts, dmatrix_kwargs={}, **kwargs):
         xgb.rabit.finalize()
     return result
 
-
 def _rebalance(client, data, labels):
     """
     Rebalance uniformely data between all workers.
@@ -92,7 +91,7 @@ def _rebalance(client, data, labels):
     """
     # Break apart Dask.array/dataframe into chunks/parts
 
-    workers = client.scheduler.workers
+    workers = client.scheduler_info()['workers']
     data_parts = data.repartition(npartitions=len(workers)).to_delayed()
     label_parts = labels.repartition(npartitions=len(workers)).to_delayed()
 
@@ -121,6 +120,7 @@ def _train(client, params, data, labels, dmatrix_kwargs={}, **kwargs):
     #parts = list(map(delayed, zip(data_parts, label_parts)))
     #parts = client.compute(parts)  # Start computation in the background
     parts = _rebalance(client, data, labels)
+    logger.info("berfore wait")
     yield _wait(parts)
 
     # Because XGBoost-python doesn't yet allow iterative training, we need to
