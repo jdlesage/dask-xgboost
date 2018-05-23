@@ -4,6 +4,7 @@ from threading import Thread
 
 import dask.dataframe as dd
 import dask.array as da
+import itertools
 import numpy as np
 import pandas as pd
 from toolz import first, assoc
@@ -83,6 +84,21 @@ def train_part(env, param, list_of_parts, dmatrix_kwargs={}, **kwargs):
     return result
 
 
+def _rebalance(client, data, labels):
+    """
+    Rebalance uniformely data between all workers.
+
+    :return: future on the part of data
+    """
+    workers = client.scheduler.workers
+    rebalanced_data = data.repartition(npartitions=len(workers)).to_delayed()
+    rebalanced_labels = labels.repartition(npartitions=len(workers)).to_delayed()
+
+    parts = list(map(delayed, zip(rebalanced_data, rebalanced_labels)))
+    futures = [client.compute(part, workers=[worker]) for part, worker in zip(parts, itertools.cycle(workers.keys()))]
+    return futures
+
+
 @gen.coroutine
 def _train(client, params, data, labels, dmatrix_kwargs={}, **kwargs):
     """
@@ -103,8 +119,9 @@ def _train(client, params, data, labels, dmatrix_kwargs={}, **kwargs):
         label_parts = label_parts.flatten().tolist()
 
     # Arrange parts into pairs.  This enforces co-locality
-    parts = list(map(delayed, zip(data_parts, label_parts)))
-    parts = client.compute(parts)  # Start computation in the background
+    #parts = list(map(delayed, zip(data_parts, label_parts)))
+    #parts = client.compute(parts)  # Start computation in the background
+    parts = _rebalance(client, data_parts, label_parts)
     yield _wait(parts)
 
     # Because XGBoost-python doesn't yet allow iterative training, we need to
