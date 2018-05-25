@@ -1,4 +1,5 @@
 from collections import defaultdict
+import contextlib
 import logging
 from threading import Thread
 
@@ -261,6 +262,24 @@ class XGBRegressor(xgb.XGBRegressor):
         client = default_client()
         return predict(client, self._Booster, X)
 
+@contextlib.contextmanager
+def _rabit():
+    xgb.rabit.init()
+    yield
+    xgb.rabit.finalize()
+
+
+def _predict_proba_part(model, part, output_margin, ntree_limit):
+    with _rabit():
+        dm = xgb.DMatrix(part.values, feature_names=part.columns, nthread=model.n_jobs, missing=model.missing)
+        class_probs =  model.get_booster().predict(dm, output_margin=output_margin, ntree_limit=ntree_limit)
+        if model.objective == "multi:softprob":
+            return class_probs
+        else:
+            classone_probs = class_probs
+            classzero_probs = 1.0 - classone_probs
+            return np.vstack((classzero_probs, classone_probs)).transpose()
+
 
 class XGBClassifier(xgb.XGBClassifier):
 
@@ -302,3 +321,9 @@ class XGBClassifier(xgb.XGBClassifier):
         else:
             cidx = (class_probs > 0).astype(np.int64)
         return cidx
+
+    def predict_proba(self, data, output_margin=False, ntree_limit=0):
+        return data.map_partitions(lambda df: _predict_proba_part(self, df, output_margin, ntree_limit))
+
+
+
